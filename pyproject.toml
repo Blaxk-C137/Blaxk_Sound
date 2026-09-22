@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# tests/ has no __init__.py, so pytest's prepend import mode would put tests/ on
+# sys.path rather than the repo root, and `import blaxk_sounds` would fail.
+pythonpath = ["."]
+addopts = "-q"
