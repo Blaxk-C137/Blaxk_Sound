@@ -206,11 +206,24 @@ It performs no config parsing and no sound logic. Every line of cleverness added
 to the shim is a line that can break git, so it is kept short enough to read in
 full when something goes wrong.
 
-The shim is **generated at install from a template**, not copied verbatim. The
-only substitution is the `REAL_GIT` literal (§4.5) — which is what lets the shim
-avoid parsing config while still knowing where git lives. Regenerating the shim is
-how a moved git is accommodated: `doctor` reports the drift, and re-running
-install rewrites it.
+The shim is **generated at install from a template**, not copied verbatim. Two
+literals are substituted:
+
+| Placeholder | Value | Why |
+|---|---|---|
+| `__REAL_GIT__` | Absolute path to real git | Lets the shim avoid parsing config while knowing where git lives |
+| `__INSTALL_DIR__` | Where the Python package was installed | The shim must set `PYTHONPATH` so `python3 -m blaxk_sounds.play` resolves; see below |
+
+`PYTHONPATH` is set **per-invocation, not exported**, so it never leaks into git's
+environment and from there into your hooks:
+
+```bash
+PLAYER_PYTHONPATH="$INSTALL_DIR${PYTHONPATH:+:$PYTHONPATH}"
+PYTHONPATH="$PLAYER_PYTHONPATH" python3 -m blaxk_sounds.play start >/dev/null 2>&1 &
+```
+
+Regenerating the shim is how a moved git is accommodated: `doctor` reports the
+drift, and re-running install rewrites it.
 
 `enabled` (§8) is deliberately *not* checked here. Muting is handled in
 `play.py`, so a disabled system still delegates to Python and Python exits
@@ -451,7 +464,7 @@ check:
 | Shim wins the `PATH` race over `real_git` | a later `PATH` entry shadowing it |
 | `real_git` exists, is executable | git moved or removed |
 | `real_git` is not the shim itself | **recursion guard** — catastrophic if missed |
-| Shim's baked `REAL_GIT` agrees with config | hand-edited shim, or git moved (§4.5) |
+| Shim's baked `REAL_GIT` and `INSTALL_DIR` agree with config and reality | hand-edited shim, git moved, or package relocated (§4.5, §5.2) |
 | Each wav exists, is readable, parses as audio | deleted or corrupt clips |
 | An audio backend is available | all four probes failed |
 | PipeWire/PulseAudio session is reachable | audio session down |
@@ -567,8 +580,9 @@ in scope for phase 1.
 1. Verify `python3` and locate real git; abort if git is missing.
 2. Refuse if `~/.local/bin/git` exists and is not ours.
 3. Copy the package to `~/.local/share/blaxk-sounds/`.
-4. Generate the shim from `shim/git.sh.template` (§5.2), substituting the real git
-   path, and write it to `~/.local/bin/git`, mode `0755`.
+4. Generate the shim from `shim/git.sh.template` (§5.2), substituting both
+   `__REAL_GIT__` and `__INSTALL_DIR__`, and write it to `~/.local/bin/git`, mode
+   `0755`.
 5. Write default config.
 6. Synthesize the three placeholder tones (§7.4).
 7. Run `doctor`, print results, warn loudly on any failure.
