@@ -62,6 +62,21 @@ if [ ! -e "$CONFIG_DIR/settings.json" ]; then
   }
 }
 JSON
+else
+    # Spec 4.5: re-running install is the remedy when git moves. doctor prints
+    # "re-run install" when the shim's REAL_GIT and config.real_git disagree, so
+    # re-running has to reconcile them, not rewrite only the shim and leave the
+    # printed remedy permanently broken.
+    PYTHONPATH="$INSTALL_DIR" python3 - "$REAL_GIT" <<'PY'
+import sys
+
+from blaxk_sounds import config
+
+settings = config.load_settings()
+if settings.get("real_git") != sys.argv[1]:
+    settings["real_git"] = sys.argv[1]
+    config.save_settings(settings)
+PY
 fi
 
 # --- 6. Placeholder tones, so it works immediately --------------------------
@@ -89,7 +104,10 @@ else
 fi
 
 # --- 7. Verify --------------------------------------------------------------
-PATH="$(dirname "$SHIM_DEST"):$PATH" \
+# No PATH prepend here on purpose. doctor is run as a module, so it needs
+# nothing from PATH, and prepending the shim's own directory would guarantee
+# "shim wins PATH" passes by construction - the one check that catches a PATH
+# without ~/.local/bin ahead of /usr/bin, which is the whole install.
 PYTHONPATH="$INSTALL_DIR" \
     python3 -m blaxk_sounds.doctor || warn "doctor reported problems (see above)"
 

@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -96,6 +97,33 @@ def test_installer_refuses_to_clobber_a_foreign_git(home):
     assert result.returncode != 0
     assert "refus" in (result.stderr + result.stdout).lower()
     assert foreign.read_text() == "#!/bin/sh\necho not ours\n"
+
+
+def test_installer_does_not_mask_a_bad_path(home):
+    # doctor is run BY the installer, so it is the last line of defence for a
+    # PATH that does not actually put the shim first. If the installer prepends
+    # the shim's directory, the check passes by construction and the user gets
+    # "All checks passed" followed by silence.
+    result = run_installer(home, extra_env={"PATH": "/usr/bin:/bin"})
+    assert "[FAIL] shim wins PATH" in result.stdout, result.stdout
+
+
+def test_reinstall_repairs_a_stale_real_git(home):
+    # Spec 4.5: re-running install is the remedy for a git that moved. doctor
+    # says "re-run install" when the shim's REAL_GIT and config.real_git drift,
+    # so re-running install has to actually reconcile them.
+    assert run_installer(home).returncode == 0
+    shim = home / ".local" / "bin" / "git"
+    baked = next(
+        l.split('"')[1] for l in shim.read_text().splitlines() if l.startswith("REAL_GIT=")
+    )
+    cfg = home / ".config" / "blaxk-sounds" / "settings.json"
+    settings = json.loads(cfg.read_text())
+    settings["real_git"] = "/nonexistent/git"
+    cfg.write_text(json.dumps(settings))
+
+    assert run_installer(home).returncode == 0
+    assert json.loads(cfg.read_text())["real_git"] == baked
 
 
 def test_cli_wrapper_runs_the_package(home):

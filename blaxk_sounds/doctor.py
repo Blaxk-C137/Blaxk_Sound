@@ -29,6 +29,10 @@ def shim_path() -> Path:
     return Path.home() / ".local" / "bin" / "git"
 
 
+def cli_path() -> Path:
+    return Path.home() / ".local" / "bin" / "blaxk-sounds"
+
+
 def install_dir() -> Path:
     return config.data_dir()
 

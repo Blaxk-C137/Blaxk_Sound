@@ -130,3 +130,64 @@ def test_doctor_subcommand_runs(tmp_path, monkeypatch, capsys):
 def test_no_subcommand_prints_help(capsys):
     assert cli.main([]) != 0
     assert "usage" in capsys.readouterr().out.lower()
+
+
+def _our_shim(path):
+    path.write_text("#!/bin/sh\n# blaxk-sounds git shim\nexec /usr/bin/git \"$@\"\n")
+    path.chmod(0o755)
+    return path
+
+
+def _our_wrapper(path):
+    path.write_text("#!/bin/sh\n# blaxk-sounds CLI wrapper. GENERATED\n")
+    path.chmod(0o755)
+    return path
+
+
+def test_uninstall_refuses_a_foreign_git(tmp_path, monkeypatch):
+    foreign = tmp_path / "git"
+    foreign.write_text("#!/bin/sh\necho not ours\n")
+    monkeypatch.setattr(cli.doctor, "shim_path", lambda: foreign)
+    assert cli.main(["uninstall"]) != 0
+    assert foreign.read_text() == "#!/bin/sh\necho not ours\n"
+
+
+def test_uninstall_purge_still_refuses_a_foreign_git(tmp_path, monkeypatch):
+    # --purge is documented as dropping *your sounds and config*. It must not
+    # double as an override of the guard that protects someone else's git.
+    foreign = tmp_path / "git"
+    foreign.write_text("#!/bin/sh\necho not ours\n")
+    monkeypatch.setattr(cli.doctor, "shim_path", lambda: foreign)
+    assert cli.main(["uninstall", "--purge"]) != 0
+    assert foreign.read_text() == "#!/bin/sh\necho not ours\n"
+
+
+def test_uninstall_removes_the_shim_and_the_cli_wrapper(tmp_path, monkeypatch):
+    shim = _our_shim(tmp_path / "git")
+    wrapper = _our_wrapper(tmp_path / "blaxk-sounds")
+    monkeypatch.setattr(cli.doctor, "shim_path", lambda: shim)
+    monkeypatch.setattr(cli.doctor, "cli_path", lambda: wrapper)
+    assert cli.main(["uninstall"]) == 0
+    assert not shim.exists()
+    assert not wrapper.exists()
+
+
+def test_uninstall_refuses_a_foreign_cli_wrapper(tmp_path, monkeypatch):
+    shim = _our_shim(tmp_path / "git")
+    foreign = tmp_path / "blaxk-sounds"
+    foreign.write_text("#!/bin/sh\necho not ours either\n")
+    monkeypatch.setattr(cli.doctor, "shim_path", lambda: shim)
+    monkeypatch.setattr(cli.doctor, "cli_path", lambda: foreign)
+    assert cli.main(["uninstall"]) != 0
+    assert foreign.read_text() == "#!/bin/sh\necho not ours either\n"
+    assert shim.exists()  # checked before removing anything, so nothing is half-done
+
+
+def test_uninstall_keeps_config_unless_purged(tmp_path, monkeypatch):
+    shim = _our_shim(tmp_path / "git")
+    wrapper = _our_wrapper(tmp_path / "blaxk-sounds")
+    monkeypatch.setattr(cli.doctor, "shim_path", lambda: shim)
+    monkeypatch.setattr(cli.doctor, "cli_path", lambda: wrapper)
+    config.save_settings(config.default_settings())
+    assert cli.main(["uninstall"]) == 0
+    assert config.config_path().exists()

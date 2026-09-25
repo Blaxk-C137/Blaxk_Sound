@@ -109,22 +109,37 @@ def _cmd_enable(args) -> int:
     return 0
 
 
+def _is_ours(path: Path, marker: str) -> bool:
+    try:
+        return marker in path.read_text(encoding="utf-8")
+    except Exception:
+        return False
+
+
 def _cmd_uninstall(args) -> int:
-    shim = doctor.shim_path()
-    if shim.exists():
-        if not args.purge:
-            try:
-                text = shim.read_text(encoding="utf-8")
-            except Exception:
-                text = ""
-            if "blaxk-sounds git shim" not in text:
-                print(
-                    f"{shim} does not look like our shim; refusing to remove it",
-                    file=sys.stderr,
-                )
-                return 1
-        shim.unlink()
-        print(f"removed {shim}")
+    # Every path we might delete, with the marker that proves it is ours. The
+    # ownership check does not depend on --purge: --purge drops sounds and
+    # config, and must never double as an override of the guard protecting a
+    # git or a command somebody else put at these paths.
+    targets = (
+        (doctor.shim_path(), "blaxk-sounds git shim"),
+        (doctor.cli_path(), "blaxk-sounds CLI wrapper"),
+    )
+
+    # Check all of them before removing any, so a refusal leaves nothing
+    # half-removed.
+    for path, marker in targets:
+        if path.exists() and not _is_ours(path, marker):
+            print(
+                f"{path} does not look like ours; refusing to remove anything",
+                file=sys.stderr,
+            )
+            return 1
+
+    for path, _ in targets:
+        if path.exists():
+            path.unlink()
+            print(f"removed {path}")
 
     package = config.data_dir() / "blaxk_sounds"
     if package.exists():

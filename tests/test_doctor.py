@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 
@@ -121,3 +122,73 @@ def test_main_exits_non_zero_when_a_fatal_check_fails(shim, monkeypatch, capsys)
         "real git", False, "missing", True
     ))
     assert doctor.main([]) != 0
+
+
+def test_check_shim_wins_path_passes_when_it_is_first(shim, monkeypatch):
+    monkeypatch.setenv("PATH", f"{shim.parent}:{os.environ['PATH']}")
+    assert doctor.check_shim_wins_path(shim).ok is True
+
+
+def test_check_shim_wins_path_detects_a_shadowing_entry(shim, monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    assert doctor.check_shim_wins_path(shim).ok is False
+
+
+def test_check_backend_detects_none_found(monkeypatch):
+    monkeypatch.setattr(doctor.player, "detect_backend", lambda: None)
+    check = doctor.check_backend()
+    assert check.ok is False
+    assert check.fatal is True
+
+
+def test_check_backend_reports_the_one_it_found(monkeypatch):
+    monkeypatch.setattr(
+        doctor.player, "detect_backend", lambda: ("pw-play", ["pw-play"])
+    )
+    check = doctor.check_backend()
+    assert check.ok is True
+    assert "pw-play" in check.detail
+
+
+def test_check_audio_session_passes_for_a_live_socket(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    (tmp_path / "pipewire-0").write_text("")
+    assert doctor.check_audio_session().ok is True
+
+
+def test_check_audio_session_detects_no_socket(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    assert doctor.check_audio_session().ok is False
+
+
+def test_check_audio_session_detects_an_unset_runtime_dir(monkeypatch):
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    assert doctor.check_audio_session().ok is False
+
+
+def test_check_ffmpeg_is_present_on_this_machine():
+    assert doctor.check_ffmpeg().ok is True
+
+
+def test_check_ffmpeg_absent_is_a_warning_not_a_failure(monkeypatch):
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
+    check = doctor.check_ffmpeg()
+    assert check.ok is False
+    assert check.fatal is False
+
+
+def test_every_check_in_the_chain_is_covered_by_a_named_check(shim, monkeypatch):
+    monkeypatch.setattr(doctor, "shim_path", lambda: shim)
+    names = {check.name for check in doctor.run_checks()}
+    for expected in (
+        "shim installed",
+        "shim wins PATH",
+        "real git",
+        "recursion guard",
+        "shim literals",
+        "config parses",
+        "audio backend",
+        "audio session",
+        "ffmpeg present",
+    ):
+        assert expected in names, expected
