@@ -64,12 +64,14 @@ def test_non_dict_sounds_is_replaced():
     assert set(config.load_settings()["sounds"]) == {"start", "success", "fail"}
 
 
-def test_save_returns_false_rather_than_raising(tmp_path):
-    monkeypatch_target = tmp_path / "a-file-not-a-dir"
-    monkeypatch_target.write_text("x")
-    import os
+def test_save_returns_false_rather_than_raising(tmp_path, monkeypatch):
+    # A path whose parent is a regular file, so mkdir fails.
+    not_a_dir = tmp_path / "a-file-not-a-dir"
+    not_a_dir.write_text("x")
 
-    os.environ["BLAXK_SOUNDS_CONFIG"] = str(monkeypatch_target / "settings.json")
+    # monkeypatch, not os.environ: a leaked var would point later tests at a
+    # tmp_path that no longer exists.
+    monkeypatch.setenv("BLAXK_SOUNDS_CONFIG", str(not_a_dir / "settings.json"))
     assert config.save_settings(config.default_settings()) is False
 
 
