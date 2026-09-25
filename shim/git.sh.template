@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# blaxk-sounds git shim.
+#
+# GENERATED FILE - do not edit by hand. Re-run install/install.sh instead.
+# The two values below are substituted at install time.
+#
+# Deliberately NO `set -e`: "$REAL_GIT" "$@" exits non-zero on a failed push,
+# and errexit would abort before the exit code is captured.
+#
+# Deliberately NO captured output: stdin, stdout and stderr must pass straight
+# through, or a credential prompt would hang.
+
+REAL_GIT="__REAL_GIT__"
+INSTALL_DIR="__INSTALL_DIR__"
+
+find_subcommand() {
+    local skip_next=0 arg
+    for arg in "$@"; do
+        if [ "$skip_next" = 1 ]; then skip_next=0; continue; fi
+        case "$arg" in
+            -C|-c|--git-dir|--work-tree|--namespace|--exec-path|--config-env)
+                skip_next=1 ;;
+            -C?*|-c?*)
+                ;;                                  # value attached to the option
+            -*)
+                ;;                                  # any other option, takes no value
+            *)
+                printf '%s' "$arg"
+                return 0 ;;
+        esac
+    done
+    return 1
+}
+
+subcommand="$(find_subcommand "$@")"
+
+if [ "$subcommand" != "push" ]; then
+    exec "$REAL_GIT" "$@"
+fi
+
+# PYTHONPATH is set per-invocation rather than exported, so it never leaks into
+# git's environment and from there into your hooks.
+PLAYER_PYTHONPATH="$INSTALL_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
+PYTHONPATH="$PLAYER_PYTHONPATH" python3 -m blaxk_sounds.play start >/dev/null 2>&1 &
+
+"$REAL_GIT" "$@"
+rc=$?
+
+if [ "$rc" -ne 130 ]; then
+    if [ "$rc" -eq 0 ]; then
+        event=success
+    else
+        event=fail
+    fi
+    PYTHONPATH="$PLAYER_PYTHONPATH" python3 -m blaxk_sounds.play "$event" >/dev/null 2>&1 &
+fi
+
+exit "$rc"

@@ -145,6 +145,9 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'blaxk_sounds'`
 # pyproject.toml
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# tests/ has no __init__.py, so pytest's prepend import mode would put tests/ on
+# sys.path rather than the repo root, and `import blaxk_sounds` would fail.
+pythonpath = ["."]
 addopts = "-q"
 ```
 
@@ -378,7 +381,7 @@ git commit -m "Add audio backend detection with PipeWire-first probe order"
 
 **Files:**
 - Modify: `blaxk_sounds/player.py`
-- Create: `tests/stubs/recorder.sh`, `tests/stubs/sleeper.sh`
+- Create: `tests/stubs/recorder.sh`, `tests/stubs/sleeper.sh`, `tests/helpers.py`
 - Test: `tests/test_player_play.py`
 
 **Interfaces:**
@@ -403,15 +406,80 @@ sleep "${SLEEPER_SECONDS:-30}"
 ```
 
 ```python
+# tests/helpers.py
+"""Shared test helpers.
+
+Playback is detached by design (spec section 6 rule 5), so a test can never
+assume a sound has been recorded by the time the call that requested it
+returns. Every log assertion goes through `settle` first.
+"""
+
+import time
+from pathlib import Path
+
+
+def read_lines(log: Path) -> list[str]:
+    """Non-blank lines currently in the recorder log."""
+    try:
+        text = log.read_text()
+    except FileNotFoundError:
+        return []
+    return [line for line in text.splitlines() if line.strip()]
+
+
+def settle(log: Path, timeout: float = 3.0, quiet: float = 0.25) -> None:
+    """Block until the log stops changing.
+
+    Waiting for a specific expected marker would race the *other* backgrounded
+    sound, and — worse — would let a negative assertion ("no sound was played")
+    pass simply because the sound had not landed yet. Waiting for quiescence
+    covers a positive and a negative assertion alike.
+    """
+    deadline = time.monotonic() + timeout
+    previous: object = object()
+    stable_since: float | None = None
+    while time.monotonic() < deadline:
+        try:
+            current = log.read_text()
+        except FileNotFoundError:
+            current = ""
+        if current == previous:
+            if stable_since is None:
+                stable_since = time.monotonic()
+            elif time.monotonic() - stable_since >= quiet:
+                return
+        else:
+            previous = current
+            stable_since = None
+        time.sleep(0.05)
+
+
+def wait_until(predicate, timeout: float = 3.0, interval: float = 0.05) -> bool:
+    """Poll `predicate` until it is true. Returns whether it became true.
+
+    For conditions that are observable directly (a process dying) rather than
+    through the log, waiting on the condition beats waiting on the clock.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return predicate()
+```
+
+```python
 # tests/test_player_play.py
 import os
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
 
 from blaxk_sounds import player
+
+# tests/ has no __init__.py, so pytest prepends tests/ to sys.path.
+from helpers import read_lines, settle, wait_until
 
 STUBS = Path(__file__).parent / "stubs"
 
@@ -427,23 +495,20 @@ def isolated(tmp_path, monkeypatch):
 
 
 def recorder_lines(tmp_path):
-    log = tmp_path / "recorder.log"
-    if not log.exists():
-        return []
-    return [line for line in log.read_text().splitlines() if line.strip()]
+    return read_lines(tmp_path / "recorder.log")
 
 
 def test_play_records_the_path(tmp_path):
     sound = tmp_path / "a.wav"
     sound.write_bytes(b"x")
     assert player.play(str(sound)) is True
-    time.sleep(0.3)
+    settle(tmp_path / "recorder.log")
     assert recorder_lines(tmp_path) == [str(sound)]
 
 
 def test_play_returns_false_for_missing_file(tmp_path):
     assert player.play(str(tmp_path / "nope.wav")) is False
-    time.sleep(0.2)
+    settle(tmp_path / "recorder.log")
     assert recorder_lines(tmp_path) == []
 
 
@@ -488,13 +553,14 @@ def test_new_sound_kills_the_previous_one(tmp_path, monkeypatch):
     sound.write_bytes(b"x")
 
     assert player.play(str(sound)) is True
-    time.sleep(0.4)
+    settle(tmp_path / "recorder.log")
     first_pid = int(recorder_lines(tmp_path)[0])
     assert _alive(first_pid)
 
     assert player.play(str(sound)) is True
-    time.sleep(0.4)
-    assert not _alive(first_pid), "previous sound should have been killed"
+    assert wait_until(lambda: not _alive(first_pid)), (
+        "previous sound should have been killed"
+    )
     player.pidfile().unlink(missing_ok=True)
 
 
@@ -507,7 +573,7 @@ def test_stale_pidfile_pointing_at_unrelated_process_is_not_killed(tmp_path):
         sound = tmp_path / "a.wav"
         sound.write_bytes(b"x")
         player.play(str(sound))
-        time.sleep(0.3)
+        settle(tmp_path / "recorder.log")
         assert victim.poll() is None, "must not kill a pid that is not our player"
     finally:
         victim.kill()
@@ -642,12 +708,14 @@ git commit -m "Add detached playback with pidfile takeover of the previous sound
 ```python
 # tests/test_play.py
 import json
-import time
 from pathlib import Path
 
 import pytest
 
 from blaxk_sounds import config, play
+
+# tests/ has no __init__.py, so pytest prepends tests/ to sys.path.
+from helpers import read_lines, settle
 
 STUBS = Path(__file__).parent / "stubs"
 
@@ -676,21 +744,20 @@ def write_config(tmp_path, **overrides):
 
 
 def records(tmp_path):
-    log = tmp_path / "recorder.log"
-    return [line for line in log.read_text().splitlines() if line] if log.exists() else []
+    return read_lines(tmp_path / "recorder.log")
 
 
 def test_plays_the_requested_event(tmp_path):
     settings = write_config(tmp_path)
     assert play.main(["success"]) == 0
-    time.sleep(0.3)
+    settle(tmp_path / "recorder.log")
     assert records(tmp_path) == [settings["sounds"]["success"]]
 
 
 def test_disabled_setting_plays_nothing(tmp_path):
     write_config(tmp_path, enabled=False)
     assert play.main(["success"]) == 0
-    time.sleep(0.3)
+    settle(tmp_path / "recorder.log")
     assert records(tmp_path) == []
 
 
@@ -698,14 +765,14 @@ def test_disabled_env_var_plays_nothing(tmp_path, monkeypatch):
     write_config(tmp_path)
     monkeypatch.setenv("BLAXK_SOUNDS_DISABLED", "1")
     assert play.main(["success"]) == 0
-    time.sleep(0.3)
+    settle(tmp_path / "recorder.log")
     assert records(tmp_path) == []
 
 
 def test_unknown_event_plays_nothing(tmp_path):
     write_config(tmp_path)
     assert play.main(["banana"]) == 0
-    time.sleep(0.3)
+    settle(tmp_path / "recorder.log")
     assert records(tmp_path) == []
 
 
@@ -713,7 +780,7 @@ def test_wrong_argument_count_plays_nothing(tmp_path):
     write_config(tmp_path)
     assert play.main([]) == 0
     assert play.main(["a", "b"]) == 0
-    time.sleep(0.3)
+    settle(tmp_path / "recorder.log")
     assert records(tmp_path) == []
 
 
@@ -808,10 +875,12 @@ git commit -m "Add push-path entry point that never fails the caller"
 # tests/test_shim.py
 import os
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
+
+# tests/ has no __init__.py, so pytest prepends tests/ to sys.path.
+from helpers import settle
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = REPO_ROOT / "shim" / "git.sh.template"
@@ -862,13 +931,10 @@ def run(sandbox, *args, env=None):
         text=True,
         env={**os.environ, **(env or {})},
     )
-    # The start sound is backgrounded, so give it a moment to land in the log.
-    for _ in range(30):
-        time.sleep(0.05)
-        if "PLAY:" in sandbox["log"].read_text() or not args:
-            break
-        if args and args[0] not in ("push",):
-            break
+    # Both the start and the result sound are backgrounded, so neither has
+    # necessarily landed by the time the shim exits. Waiting for quiescence is
+    # what makes both the positive and the negative assertions sound.
+    settle(sandbox["log"])
     return result
 
 
@@ -984,7 +1050,7 @@ def test_start_sound_precedes_a_slow_git(sandbox):
         text=True,
         env=os.environ,
     )
-    time.sleep(0.5)
+    settle(sandbox["log"])
 
     recorded = lines(sandbox)
     assert "GIT-DONE" in recorded, "the stub git never ran"
@@ -1015,7 +1081,7 @@ def test_git_receives_all_of_stdin(sandbox):
         capture_output=True,
         env=os.environ,
     )
-    time.sleep(0.3)
+    settle(sandbox["log"])
     assert (sandbox["tmp"] / "log.stdin").read_text() == payload
 ```
 
@@ -1124,10 +1190,12 @@ silence instead of a git that will not run."
 
 import os
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
+
+# tests/ has no __init__.py, so pytest prepends tests/ to sys.path.
+from helpers import read_lines, settle
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = REPO_ROOT / "shim" / "git.sh.template"
@@ -1210,13 +1278,12 @@ def push(workspace, *args):
         text=True,
         env=workspace["env"],
     )
-    time.sleep(0.5)  # let the backgrounded result sound land
+    settle(workspace["log"])
     return result
 
 
 def played(workspace):
-    log = workspace["log"]
-    return [line for line in log.read_text().splitlines() if line] if log.exists() else []
+    return read_lines(workspace["log"])
 
 
 def test_successful_push_plays_start_then_success(workspace):
@@ -1951,12 +2018,14 @@ git commit -m "Add doctor verifying the ten-link push-sound chain"
 
 ```python
 # tests/test_cli.py
-import time
 from pathlib import Path
 
 import pytest
 
 from blaxk_sounds import cli, config
+
+# tests/ has no __init__.py, so pytest prepends tests/ to sys.path.
+from helpers import read_lines, settle
 
 STUBS = Path(__file__).parent / "stubs"
 
@@ -1973,8 +2042,7 @@ def isolated(tmp_path, monkeypatch):
 
 
 def records(tmp_path):
-    log = tmp_path / "recorder.log"
-    return [line for line in log.read_text().splitlines() if line] if log.exists() else []
+    return read_lines(tmp_path / "recorder.log")
 
 
 def test_enable_and_disable_toggle_config():
@@ -2013,7 +2081,7 @@ def test_test_plays_one_event(tmp_path):
     config.save_settings(settings)
 
     assert cli.main(["test", "success"]) == 0
-    time.sleep(0.3)
+    settle(tmp_path / "recorder.log")
     assert records(tmp_path) == [str(sound)]
 
 
@@ -2026,7 +2094,9 @@ def test_test_with_no_argument_plays_all_three(tmp_path):
     config.save_settings(settings)
 
     assert cli.main(["test"]) == 0
-    time.sleep(3.5)
+    # _cmd_test spaces the three plays 1s apart, so all three have been spawned
+    # by the time it returns; give the last one room to land.
+    settle(tmp_path / "recorder.log", timeout=6.0)
     assert len(records(tmp_path)) == 3
 
 
