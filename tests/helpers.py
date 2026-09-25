@@ -18,15 +18,25 @@ def read_lines(log: Path) -> list[str]:
     return [line for line in text.splitlines() if line.strip()]
 
 
-def settle(log: Path, timeout: float = 3.0, quiet: float = 0.25) -> None:
+def settle(log: Path, timeout: float = 3.0, quiet: float = 0.25, expect: int = 0) -> None:
     """Block until the log stops changing.
 
     Waiting for a specific expected marker would race the *other* backgrounded
     sound, and — worse — would let a negative assertion ("no sound was played")
     pass simply because the sound had not landed yet. Waiting for quiescence
     covers a positive and a negative assertion alike.
+
+    Quiescence alone cannot tell "nothing has played yet" from "nothing will
+    play", though: an empty log is instantly stable, so a positive assertion
+    can read it a third of a second in and fail with an IndexError on a loaded
+    machine. Positive assertions therefore pass `expect`, the number of lines
+    they need before quiet means anything. Negative assertions leave it at 0 —
+    they must not wait for a marker that is never coming.
     """
     deadline = time.monotonic() + timeout
+    while expect and len(read_lines(log)) < expect and time.monotonic() < deadline:
+        time.sleep(0.05)
+
     previous: object = object()
     stable_since: float | None = None
     while time.monotonic() < deadline:

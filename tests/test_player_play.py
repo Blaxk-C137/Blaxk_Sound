@@ -30,7 +30,7 @@ def test_play_records_the_path(tmp_path):
     sound = tmp_path / "a.wav"
     sound.write_bytes(b"x")
     assert player.play(str(sound)) is True
-    settle(tmp_path / "recorder.log")
+    settle(tmp_path / "recorder.log", expect=1)
     assert recorder_lines(tmp_path) == [str(sound)]
 
 
@@ -81,7 +81,7 @@ def test_new_sound_kills_the_previous_one(tmp_path, monkeypatch):
     sound.write_bytes(b"x")
 
     assert player.play(str(sound)) is True
-    settle(tmp_path / "recorder.log")
+    settle(tmp_path / "recorder.log", expect=1)
     first_pid = int(recorder_lines(tmp_path)[0])
     assert _alive(first_pid)
 

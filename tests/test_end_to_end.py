@@ -82,7 +82,7 @@ def workspace(tmp_path):
     return {"shim": shim, "work": work, "env": env, "log": log, "sounds": sounds_map}
 
 
-def push(workspace, *args):
+def push(workspace, *args, expect=0):
     result = subprocess.run(
         [str(workspace["shim"]), "push", *args],
         cwd=workspace["work"],
@@ -90,7 +90,10 @@ def push(workspace, *args):
         text=True,
         env=workspace["env"],
     )
-    settle(workspace["log"])
+    # The start and result sounds are both backgrounded, so a positive
+    # assertion has to say how many lines it needs before quiescence is
+    # meaningful. See helpers.settle.
+    settle(workspace["log"], expect=expect)
     return result
 
 
@@ -99,7 +102,7 @@ def played(workspace):
 
 
 def test_successful_push_plays_start_then_success(workspace):
-    result = push(workspace, "-u", "origin", "main")
+    result = push(workspace, "-u", "origin", "main", expect=2)
     assert result.returncode == 0, result.stderr
     assert played(workspace) == [
         workspace["sounds"]["start"],
@@ -108,7 +111,7 @@ def test_successful_push_plays_start_then_success(workspace):
 
 
 def test_rejected_push_plays_fail(workspace):
-    assert push(workspace, "-u", "origin", "main").returncode == 0
+    assert push(workspace, "-u", "origin", "main", expect=2).returncode == 0
     workspace["log"].unlink()
 
     # Rewrite history so the second push is a non-fast-forward.
@@ -116,7 +119,7 @@ def test_rejected_push_plays_fail(workspace):
     git("add", "file.txt", cwd=workspace["work"])
     git("commit", "--amend", "-m", "amended", cwd=workspace["work"])
 
-    result = push(workspace, "origin", "main")
+    result = push(workspace, "origin", "main", expect=2)
     assert result.returncode != 0
     assert played(workspace)[-1] == workspace["sounds"]["fail"]
 
@@ -127,9 +130,9 @@ def test_git_output_is_not_swallowed(workspace):
 
 
 def test_push_to_up_to_date_remote_still_sounds(workspace):
-    assert push(workspace, "-u", "origin", "main").returncode == 0
+    assert push(workspace, "-u", "origin", "main", expect=2).returncode == 0
     workspace["log"].unlink()
-    result = push(workspace, "origin", "main")  # everything up-to-date, exit 0
+    result = push(workspace, "origin", "main", expect=2)  # up-to-date, exit 0
     assert result.returncode == 0
     assert played(workspace)[-1] == workspace["sounds"]["success"]
 

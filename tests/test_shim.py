@@ -54,7 +54,7 @@ def sandbox(tmp_path, monkeypatch):
     return {"shim": shim, "log": log, "tmp": tmp_path}
 
 
-def run(sandbox, *args, env=None):
+def run(sandbox, *args, env=None, expect=0):
     result = subprocess.run(
         [str(sandbox["shim"]), *args],
         capture_output=True,
@@ -63,8 +63,10 @@ def run(sandbox, *args, env=None):
     )
     # Both the start and the result sound are backgrounded, so neither has
     # necessarily landed by the time the shim exits. Waiting for quiescence is
-    # what makes both the positive and the negative assertions sound.
-    settle(sandbox["log"])
+    # what makes both the positive and the negative assertions sound; `expect`
+    # is how many log lines a positive assertion needs before quiet means
+    # anything, and it stays 0 for the negative ones.
+    settle(sandbox["log"], expect=expect)
     return result
 
 
@@ -87,7 +89,7 @@ def lines(sandbox):
     ],
 )
 def test_push_is_detected(sandbox, args):
-    run(sandbox, *args)
+    run(sandbox, *args, expect=1)
     recorded = lines(sandbox)
     assert any(line.startswith("PLAY:-m blaxk_sounds.play start") for line in recorded)
     assert "GIT:" + " ".join(args) in recorded
@@ -119,13 +121,13 @@ def test_non_push_replaces_the_process(sandbox):
 
 
 def test_success_plays_success_event(sandbox):
-    run(sandbox, "push", env={"STUB_GIT_RC": "0"})
+    run(sandbox, "push", env={"STUB_GIT_RC": "0"}, expect=2)
     recorded = lines(sandbox)
     assert any(line.endswith("blaxk_sounds.play success") for line in recorded)
 
 
 def test_failure_plays_fail_event(sandbox):
-    run(sandbox, "push", env={"STUB_GIT_RC": "1"})
+    run(sandbox, "push", env={"STUB_GIT_RC": "1"}, expect=2)
     recorded = lines(sandbox)
     assert any(line.endswith("blaxk_sounds.play fail") for line in recorded)
 
@@ -137,7 +139,7 @@ def test_exit_code_is_passed_through(sandbox):
 
 
 def test_interrupt_exit_130_plays_nothing(sandbox):
-    run(sandbox, "push", env={"STUB_GIT_RC": "130"})
+    run(sandbox, "push", env={"STUB_GIT_RC": "130"}, expect=1)
     recorded = lines(sandbox)
     assert any(line.startswith("PLAY:-m blaxk_sounds.play start") for line in recorded)
     assert not any(
@@ -184,7 +186,7 @@ def test_start_sound_precedes_a_slow_git(sandbox):
         text=True,
         env=os.environ,
     )
-    settle(sandbox["log"])
+    settle(sandbox["log"], expect=1)
 
     recorded = lines(sandbox)
     assert "GIT-DONE" in recorded, "the stub git never ran"

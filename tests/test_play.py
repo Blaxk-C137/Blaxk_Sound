@@ -41,7 +41,7 @@ def records(tmp_path):
 def test_plays_the_requested_event(tmp_path):
     settings = write_config(tmp_path)
     assert play.main(["success"]) == 0
-    settle(tmp_path / "recorder.log")
+    settle(tmp_path / "recorder.log", expect=1)
     assert records(tmp_path) == [settings["sounds"]["success"]]
 
 
