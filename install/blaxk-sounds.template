@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# blaxk-sounds CLI wrapper. GENERATED - re-run install/install.sh instead.
+INSTALL_DIR="__INSTALL_DIR__"
+exec env PYTHONPATH="$INSTALL_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -m blaxk_sounds.cli "$@"
